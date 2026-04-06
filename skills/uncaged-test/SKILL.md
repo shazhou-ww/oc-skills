@@ -17,28 +17,55 @@ How to test the Uncaged Web UI as an AI Agent.
 
 ## Quick Start — Agent Token Login
 
-Each agent has a secret token stored in Infisical. Use it to log in without Google OAuth.
+Each agent can generate their own secret token and inject it into D1. No need to ask anyone.
 
-### Step 1: Get your token
+### Prerequisites
 
-```bash
-TOKEN=$(secret get UNCAGED_AGENT_TOKEN_XIAOJU | head -1)
-```
+- `secret` CLI (Infisical) — for storing the token
+- Cloudflare API credentials — `secret get CLOUDFLARE_API_TOKEN` and `secret get CLOUDFLARE_ACCOUNT_ID`
+- `wrangler` — for D1 operations (`npx wrangler` in the uncaged repo works)
 
-Token naming convention: `UNCAGED_AGENT_TOKEN_<NAME>` (e.g., `_XIAOJU`, `_XIAOMOOO`, `_AOBING`, `_XINGYUE`).
-
-If your token doesn't exist yet, ask 小橘 to generate one, or create it yourself:
+### Step 1: Generate your token and inject into D1
 
 ```bash
+# 1. Generate a random token and its SHA-256 hash
 TOKEN=$(openssl rand -hex 32)
 HASH=$(echo -n "$TOKEN" | sha256sum | cut -d' ' -f1)
+
+# 2. Store the token in Infisical (so you can retrieve it later)
 secret set UNCAGED_AGENT_TOKEN_<YOUR_NAME> "$TOKEN"
-# Then insert into D1 (need wrangler access):
-# INSERT INTO agent_tokens (id, user_id, agent_id, token_hash, label, created_at)
-# VALUES (lower(hex(randomblob(8))), '<user_id>', '<agent_id>', '<HASH>', '<label>', unixepoch());
+
+# 3. Look up the correct user_id and agent_id in D1
+export CLOUDFLARE_API_TOKEN=$(secret get CLOUDFLARE_API_TOKEN | head -1)
+export CLOUDFLARE_ACCOUNT_ID=$(secret get CLOUDFLARE_ACCOUNT_ID | head -1)
+cd ~/repos/uncaged/packages/worker
+npx wrangler d1 execute uncaged-memory --remote --json \
+  --command "SELECT id, slug FROM users;"
+npx wrangler d1 execute uncaged-memory --remote --json \
+  --command "SELECT id, slug, owner_id FROM agents;"
+
+# 4. Insert the token into D1 (replace user_id and agent_id with actual values)
+echo "INSERT INTO agent_tokens (id, user_id, agent_id, token_hash, label, created_at)
+VALUES (lower(hex(randomblob(8))), '<user_id>', '<agent_id>', '${HASH}', '<your-label>', unixepoch());" \
+  > /tmp/seed-token.sql
+npx wrangler d1 execute uncaged-memory --remote --file=/tmp/seed-token.sql
+```
+
+**Example** (for user `owner-scott`, agent `doudou`):
+```bash
+echo "INSERT INTO agent_tokens (id, user_id, agent_id, token_hash, label, created_at)
+VALUES (lower(hex(randomblob(8))), 'owner-scott', 'doudou', '${HASH}', 'xiaoju-test', unixepoch());" \
+  > /tmp/seed-token.sql
+npx wrangler d1 execute uncaged-memory --remote --file=/tmp/seed-token.sql
 ```
 
 ### Step 2: Login via URL hash
+
+Retrieve your token (if already generated):
+
+```bash
+TOKEN=$(secret get UNCAGED_AGENT_TOKEN_<YOUR_NAME> | head -1)
+```
 
 Open this URL in browser (the hash fragment is stripped immediately for security):
 
@@ -128,11 +155,12 @@ Also sets `access_token` and `refresh_token` as HttpOnly cookies.
 - **Auth**: JWT (access 15min + refresh 7d), cookie-based
 - **CI/CD**: GitHub Actions → auto deploy on push to main
 
-## Current Test Accounts
+## Current D1 Info
 
-| Owner | Slug | Agent | Notes |
-|-------|------|-------|-------|
-| owner-scott | scott | doudou | 主人的豆豆，主要测试 agent |
+- **D1 Database name**: `uncaged-memory`
+- **Wrangler config**: `packages/worker/wrangler.toml`
+- **CF credentials**: `secret get CLOUDFLARE_API_TOKEN`, `secret get CLOUDFLARE_ACCOUNT_ID`
+- **Token naming**: `UNCAGED_AGENT_TOKEN_<NAME>` in Infisical
 
 ## Troubleshooting
 
