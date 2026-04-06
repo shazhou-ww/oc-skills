@@ -57,6 +57,20 @@ git checkout -b feat/descriptive-name   # for features
 
 **Never write code as the coordinator.** Use Cursor Agent CLI.
 
+### Spawning coding subagents
+
+When spawning a subagent for a coding task, **always inject the relevant skills into the task prompt**:
+
+```
+Read the skill at ~/.openclaw/workspace/skills/coding-workflow/SKILL.md and follow it.
+Read the skill at ~/.openclaw/workspace/skills/cursor-agent/SKILL.md for Cursor CLI usage.
+
+## Task
+...
+```
+
+This ensures every subagent follows the same workflow — Issue tracking, Cursor model selection, build verification, commit conventions. **Do not assume subagents know the workflow without explicit skill injection.**
+
 ### Choose model by task difficulty
 
 | Difficulty | Model | When to use |
