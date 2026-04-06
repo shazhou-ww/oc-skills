@@ -32,7 +32,7 @@ set -euo pipefail
 
 REPO="${1:?Error: repo path required. Usage: run.sh <repo> <task> [model] [mode]}"
 TASK="${2:?Error: task required. Usage: run.sh <repo> <task> [model] [mode]}"
-MODEL="${3:-sonnet-4.6}"
+MODEL="${3:-claude-4.6-sonnet-medium}"
 MODE="${4:-ask}"
 
 # --- Find the CLI binary ---

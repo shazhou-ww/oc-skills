@@ -1,6 +1,6 @@
 ---
 name: cursor-agent
-version: 1.1.0
+version: 1.2.0
 description: >
   Run Cursor Agent CLI for coding tasks — writing, editing, refactoring, reviewing,
   or planning code — without spending OpenClaw API credits. Supports direct model
@@ -40,19 +40,45 @@ cursor-agent login
 cursor-agent status
 ```
 
-## Model Selection
+## Model Selection by Task Difficulty
 
-Choose the right model for the task:
+Choose the right model based on task complexity and cost sensitivity.
+Model names are Cursor-specific — run `cursor-agent --list-models` for the full list.
 
-| Task type | Model | Flag |
-|-----------|-------|------|
-| Bug fix / feature / refactor | Claude Sonnet 4.6 | `--model sonnet-4.6` |
-| Code review / explain | Claude Sonnet 4.6 | `--model sonnet-4.6 --mode=ask` |
-| Architecture / design | Claude Opus 4.6 | `--model opus-4.6-thinking --mode=plan` |
-| Trivial / exploratory | auto | *(omit `--model`)* |
+### 🟢 Simple Tasks (one-file edits, small fixes, formatting, typos)
 
-Default (no `--model` flag) is `auto` — Cursor picks the model. Prefer specifying
-a model explicitly for predictable, high-quality output.
+| Model | Flag | Notes |
+|-------|------|-------|
+| GPT-5.4 Mini | `--model gpt-5.4-mini-medium` | Fast, cheap, good for trivial changes |
+| Gemini 3 Flash | `--model gemini-3-flash` | Fast alternative |
+| Claude Sonnet 4 | `--model claude-4-sonnet` | Reliable baseline |
+
+### 🟡 Standard Tasks (bug fixes, features, refactoring, code review)
+
+| Model | Flag | Notes |
+|-------|------|-------|
+| **Claude Sonnet 4.6** | `--model claude-4.6-sonnet-medium` | **Default pick** — best balance of quality/speed |
+| Claude Sonnet 4.6 Thinking | `--model claude-4.6-sonnet-medium-thinking` | Extended reasoning for trickier bugs |
+| GPT-5.4 | `--model gpt-5.4-medium` | Strong alternative, 1M context |
+
+### 🔴 Complex Tasks (architecture, multi-file refactoring, design, large codebases)
+
+| Model | Flag | Notes |
+|-------|------|-------|
+| Claude Opus 4.6 Thinking | `--model claude-4.6-opus-high-thinking` | Best for architecture/design |
+| Claude Opus 4.6 | `--model claude-4.6-opus-high` | When thinking is not needed |
+| GPT-5.4 High | `--model gpt-5.4-high` | High compute, 1M context |
+| GPT-5.3 Codex High | `--model gpt-5.3-codex-high` | Purpose-built for code |
+
+### Quick Decision Guide
+
+```
+Trivial / one-liner → gpt-5.4-mini-medium or gemini-3-flash
+Standard bug fix / feature → claude-4.6-sonnet-medium (default)
+Needs reasoning → claude-4.6-sonnet-medium-thinking
+Architecture / design / complex → claude-4.6-opus-high-thinking
+Not sure → claude-4.6-sonnet-medium (safe default)
+```
 
 ## Recommended Workflow
 
@@ -60,7 +86,7 @@ a model explicitly for predictable, high-quality output.
 
 ```bash
 cursor-agent -p "Review this code for bugs and suggest fixes" \
-  --model sonnet-4.6 --mode=ask --output-format text --trust
+  --model claude-4.6-sonnet-medium --mode=ask --output-format text --trust
 ```
 
 Inspect the output. If the suggestions look good, proceed to step 2.
@@ -69,7 +95,7 @@ Inspect the output. If the suggestions look good, proceed to step 2.
 
 ```bash
 cursor-agent -p "Fix the bugs identified above" \
-  --model sonnet-4.6 --force --output-format text --trust
+  --model claude-4.6-sonnet-medium --force --output-format text --trust
 ```
 
 For straightforward tasks where you trust the model, skip step 1 and go straight
@@ -80,7 +106,7 @@ to write mode.
 Pipe mode (`-p`) is more stable than ACP/interactive mode:
 
 ```bash
-cursor-agent -p "<task>" --model sonnet-4.6 --output-format text --trust
+cursor-agent -p "<task>" --model claude-4.6-sonnet-medium --output-format text --trust
 ```
 
 - Runs non-interactively, returns text output
@@ -91,37 +117,39 @@ cursor-agent -p "<task>" --model sonnet-4.6 --output-format text --trust
 
 | Scenario | Command |
 |----------|---------|
-| Code review | `cursor-agent -p "Review..." --model sonnet-4.6 --mode=ask --trust` |
-| Write code / fix bug | `cursor-agent -p "Fix..." --model sonnet-4.6 --force --trust` |
-| Planning / design | `cursor-agent -p "Plan..." --model opus-4.6-thinking --mode=plan --trust` |
-| Quick / trivial | `cursor-agent -p "Do..." --force --trust` |
+| Code review | `cursor-agent -p "Review..." --model claude-4.6-sonnet-medium --mode=ask --trust` |
+| Write code / fix bug | `cursor-agent -p "Fix..." --model claude-4.6-sonnet-medium --force --trust` |
+| Planning / design | `cursor-agent -p "Plan..." --model claude-4.6-opus-high-thinking --mode=plan --trust` |
+| Quick / trivial | `cursor-agent -p "Do..." --model gpt-5.4-mini-medium --force --trust` |
 | Check version | `cursor-agent --version` |
 | Update CLI | `cursor-agent update` |
 | List available models | `cursor-agent --list-models` |
 | List past sessions | `cursor-agent ls` |
 | Check auth status | `cursor-agent status` |
-| Login (browser) | `cursor-agent login` |
 
 ## Helper Script
 
 Use `scripts/run.sh` for standardized invocation:
 
 ```bash
-# Code review with Sonnet
-bash scripts/run.sh /path/to/repo "Review the auth module" sonnet-4.6 ask
+# Code review with Sonnet 4.6
+bash scripts/run.sh /path/to/repo "Review the auth module" claude-4.6-sonnet-medium ask
 
-# Apply changes with Sonnet
-bash scripts/run.sh /path/to/repo "Fix the auth bug" sonnet-4.6 write
+# Apply changes
+bash scripts/run.sh /path/to/repo "Fix the auth bug" claude-4.6-sonnet-medium write
 
 # Architecture planning with Opus
-bash scripts/run.sh /path/to/repo "Design the new API layer" opus-4.6-thinking plan
+bash scripts/run.sh /path/to/repo "Design the new API layer" claude-4.6-opus-high-thinking plan
+
+# Quick fix with Mini
+bash scripts/run.sh /path/to/repo "Fix the typo" gpt-5.4-mini-medium write
 
 # With timeout (seconds)
-TIMEOUT=300 bash scripts/run.sh /path/to/repo "Refactor utils" sonnet-4.6 write
+TIMEOUT=300 bash scripts/run.sh /path/to/repo "Refactor utils" claude-4.6-sonnet-medium write
 ```
 
 Arguments: `<repo_path> <task> [model] [mode]`
-- `model`: `sonnet-4.6` (recommended) | `opus-4.6-thinking` | `auto` | any available model
+- `model`: `claude-4.6-sonnet-medium` (default) | any model from `--list-models`
 - `mode`: `ask` (default, read-only) | `plan` | `write` (applies changes)
 
 ## Git Rule
@@ -140,7 +168,7 @@ Always review the diff before committing.
 |-------|---------|
 | Connection stalled | ACP/interactive mode may hang. Use headless `-p` mode instead. |
 | Sandbox git block | Cursor sandbox prevents `git commit`. Commit manually after edits. |
-| China region | Models like Sonnet/Opus/GPT are blocked. Use `cursor-agent-cn` skill with `--model auto`. |
+| China region | Models blocked server-side. Use `cursor-agent-cn` skill with `--model auto`. |
 
 ## Context Tips
 
