@@ -1,11 +1,11 @@
 ---
 name: cursor-agent
-version: 1.0.0
+version: 1.1.0
 description: >
   Run Cursor Agent CLI for coding tasks — writing, editing, refactoring, reviewing,
-  or planning code — without spending OpenClaw API credits. Tested in China region
-  with auto model routing. Use when the user asks to write/fix/refactor/review code,
-  a coding task would otherwise be done inline with Sonnet/Haiku, the user says
+  or planning code — without spending OpenClaw API credits. Supports direct model
+  selection (non-China regions). Use when the user asks to write/fix/refactor/review
+  code, a coding task would otherwise be done inline with Sonnet/Haiku, the user says
   "do this in cursor" or "use cursor for this", or any substantial file-editing task
   in a known repo. NOT for: conversational questions about code (answer inline) or
   tiny one-liners that don't warrant a subprocess.
@@ -18,14 +18,14 @@ metadata:
 Cursor Agent CLI runs on the user's Cursor subscription — zero API cost.
 Always prefer it over inline code generation for any non-trivial coding task.
 
+> **China region?** Use the `cursor-agent-cn` skill instead (uses `--model auto`
+> to work around server-side model restrictions).
+
 ## Prerequisites
 
 **Required binary: `cursor-agent`** (or the alias `agent`)
 
 Install: <https://cursor.com/docs/cli/overview> — verify with `cursor-agent --version`.
-
-The helper script (`scripts/run.sh`) will exit with an error if neither `cursor-agent`
-nor `agent` is found in PATH.
 
 ## Authentication
 
@@ -40,41 +40,27 @@ cursor-agent login
 cursor-agent status
 ```
 
-## ⚠️ China Region: Model Availability
+## Model Selection
 
-> **Tested & confirmed in WSL (China mainland, April 2026)**
+Choose the right model for the task:
 
-Specifying a model like `--model claude-sonnet-4.6` or `--model gpt-5.4` will fail:
+| Task type | Model | Flag |
+|-----------|-------|------|
+| Bug fix / feature / refactor | Claude Sonnet 4.6 | `--model sonnet-4.6` |
+| Code review / explain | Claude Sonnet 4.6 | `--model sonnet-4.6 --mode=ask` |
+| Architecture / design | Claude Opus 4.6 | `--model opus-4.6-thinking --mode=plan` |
+| Trivial / exploratory | auto | *(omit `--model`)* |
 
-```
-Model not available — This model provider doesn't serve your region
-```
+Default (no `--model` flag) is `auto` — Cursor picks the model. Prefer specifying
+a model explicitly for predictable, high-quality output.
 
-**Setting HTTP_PROXY / SOCKS5 does NOT help.** Cursor routes model selection on the
-server side based on account region, not client IP.
-
-### Solution: `--model auto`
-
-Let Cursor pick whichever model is available in your region:
-
-```bash
-cursor-agent -p "your task" --model auto --trust
-```
-
-Or simply omit `--model` — the default is `auto`.
-
-> **Trade-off:** `auto` may route to different models across runs, so output quality
-> can vary. Use the two-step workflow below to review before applying changes.
-
-## Recommended Workflow: Ask First, Write Second
-
-Because `auto` mode picks an unpredictable model, always review before applying:
+## Recommended Workflow
 
 ### Step 1 — Read-only review (`ask` mode)
 
 ```bash
 cursor-agent -p "Review this code for bugs and suggest fixes" \
-  --model auto --mode=ask --output-format text --trust
+  --model sonnet-4.6 --mode=ask --output-format text --trust
 ```
 
 Inspect the output. If the suggestions look good, proceed to step 2.
@@ -83,17 +69,18 @@ Inspect the output. If the suggestions look good, proceed to step 2.
 
 ```bash
 cursor-agent -p "Fix the bugs identified above" \
-  --model auto --force --output-format text --trust
+  --model sonnet-4.6 --force --output-format text --trust
 ```
 
-This is the safest approach, especially when you don't control which model runs behind the scenes.
+For straightforward tasks where you trust the model, skip step 1 and go straight
+to write mode.
 
 ## Headless Mode (Recommended for Automation)
 
 Pipe mode (`-p`) is more stable than ACP/interactive mode:
 
 ```bash
-cursor-agent -p "<task>" --model auto --mode=ask --output-format text --trust
+cursor-agent -p "<task>" --model sonnet-4.6 --output-format text --trust
 ```
 
 - Runs non-interactively, returns text output
@@ -104,9 +91,10 @@ cursor-agent -p "<task>" --model auto --mode=ask --output-format text --trust
 
 | Scenario | Command |
 |----------|---------|
-| Code review | `cursor-agent -p "Review..." --model auto --mode=ask --trust` |
-| Write code / fix bug | `cursor-agent -p "Fix..." --model auto --force --trust` |
-| Planning / design | `cursor-agent -p "Plan..." --model auto --mode=plan --trust` |
+| Code review | `cursor-agent -p "Review..." --model sonnet-4.6 --mode=ask --trust` |
+| Write code / fix bug | `cursor-agent -p "Fix..." --model sonnet-4.6 --force --trust` |
+| Planning / design | `cursor-agent -p "Plan..." --model opus-4.6-thinking --mode=plan --trust` |
+| Quick / trivial | `cursor-agent -p "Do..." --force --trust` |
 | Check version | `cursor-agent --version` |
 | Update CLI | `cursor-agent update` |
 | List available models | `cursor-agent --list-models` |
@@ -119,21 +107,21 @@ cursor-agent -p "<task>" --model auto --mode=ask --output-format text --trust
 Use `scripts/run.sh` for standardized invocation:
 
 ```bash
-# Read-only review (default)
-bash scripts/run.sh /path/to/repo "Review the auth module" auto ask
+# Code review with Sonnet
+bash scripts/run.sh /path/to/repo "Review the auth module" sonnet-4.6 ask
 
-# Apply changes (after user confirms)
-bash scripts/run.sh /path/to/repo "Fix the auth bug" auto write
+# Apply changes with Sonnet
+bash scripts/run.sh /path/to/repo "Fix the auth bug" sonnet-4.6 write
 
-# Planning mode
-bash scripts/run.sh /path/to/repo "Design the new API layer" auto plan
+# Architecture planning with Opus
+bash scripts/run.sh /path/to/repo "Design the new API layer" opus-4.6-thinking plan
 
 # With timeout (seconds)
-TIMEOUT=300 bash scripts/run.sh /path/to/repo "Refactor utils" auto write
+TIMEOUT=300 bash scripts/run.sh /path/to/repo "Refactor utils" sonnet-4.6 write
 ```
 
 Arguments: `<repo_path> <task> [model] [mode]`
-- `model`: `auto` (default) — or any specific model if available in your region
+- `model`: `sonnet-4.6` (recommended) | `opus-4.6-thinking` | `auto` | any available model
 - `mode`: `ask` (default, read-only) | `plan` | `write` (applies changes)
 
 ## Git Rule
@@ -150,21 +138,9 @@ Always review the diff before committing.
 
 | Issue | Details |
 |-------|---------|
-| Region-locked models | Server-side restriction; proxies don't help. Use `--model auto`. |
 | Connection stalled | ACP/interactive mode may hang. Use headless `-p` mode instead. |
-| Inconsistent output | `auto` may route to different models each run. Review before applying. |
 | Sandbox git block | Cursor sandbox prevents `git commit`. Commit manually after edits. |
-
-## Model Routing (Non-China Regions)
-
-If you're in a region with full model access, you can specify models directly:
-
-| Task type | Model flag | Mode flag |
-|-----------|------------|-----------|
-| Trivial / exploratory | *(omit — `auto`)* | *(omit)* |
-| Bug fix / feature / refactor | `--model sonnet-4.6` | *(omit)* |
-| Code review / explain | `--model sonnet-4.6` | `--mode=ask` |
-| Architecture / design | `--model opus-4.6-thinking` | `--mode=plan` |
+| China region | Models like Sonnet/Opus/GPT are blocked. Use `cursor-agent-cn` skill with `--model auto`. |
 
 ## Context Tips
 
