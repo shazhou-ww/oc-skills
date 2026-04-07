@@ -130,7 +130,24 @@ CLOUDFLARE_ACCOUNT_ID="$(secret get CLOUDFLARE_ACCOUNT_ID)" \
 
 ## 测试
 
-### 快速回归（12 个测试用例）
+### Playwright UI 测试（9 个用例，28 秒）
+
+```bash
+cd <uncaged-repo>
+npx playwright test                    # 跑全部
+npx playwright test -g "tool search"   # 跑单个
+npx playwright test --reporter=html    # 生成 HTML 报告
+```
+
+覆盖：token 登录、聊天发消息、工具搜索浮层、ESC 关闭、主题切换、JS 错误检测、手机端布局。
+
+**首次使用需安装浏览器：** `npx playwright install chromium`
+
+**指定目标环境：** `UNCAGED_URL=https://uncaged-xingyue.shazhou.work npx playwright test`
+
+**指定 token：** `TOKEN_NAME=UNCAGED_AGENT_TOKEN_XIAOJU npx playwright test`
+
+### API 回归（12 个用例，curl 脚本）
 
 ```bash
 bash tests/e2e/scripts/run-tests.sh UNCAGED_AGENT_TOKEN_XINGYUE
