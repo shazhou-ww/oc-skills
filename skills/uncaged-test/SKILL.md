@@ -1,433 +1,174 @@
 ---
 name: uncaged-test
-version: 2.0.0
+version: 3.0.0
 description: >
-  Automated E2E testing for Uncaged Web UI (uncaged.shazhou.work).
-  派给 subagent 即可运行完整场景验证，失败时自动收集前后端 log 并开 bug issue。
-  Use when: verifying deployment, testing new features, running regression checks,
-  or debugging production issues.
+  Uncaged Web UI 场景化测试。每个场景独立可验证，subagent 按场景描述自主操作，
+  有脚本跑脚本，没脚本自己按步骤操作。失败时收集 logs 并开 bug issue。
 metadata:
   requiredTools: ["secret"]
 ---
 
-# Uncaged Test v2
+# Uncaged Test
 
-Automated E2E testing for the Uncaged Web UI. Designed to be **run by subagents**.
+场景化 E2E 测试，设计给 subagent 自主执行。
 
-## Quick Start — Run All Tests
+## 使用方式
 
-```bash
-bash <skill_dir>/scripts/run-tests.sh
+### 验证单个场景
+
+```
+读 <skill_dir>/scenes/<场景>.md，按描述验证。失败了收集 logs 开 bug。
 ```
 
-Or step by step — see sections below.
-
-## Setup (one-time per agent)
-
-### 1. Ensure token exists
+### 跑全部场景（快速回归）
 
 ```bash
-# Check if you already have a token
-secret get UNCAGED_AGENT_TOKEN_XINGYUE 2>/dev/null && echo "Token exists" || echo "Need to create token"
+bash <skill_dir>/scripts/run-tests.sh [TOKEN_NAME]
 ```
 
-If no token, create one:
+### 可用场景
+
+| 场景文件 | 说明 |
+|:---------|:-----|
+| `scenes/auth.md` | 认证：token 登录、session、refresh |
+| `scenes/chat.md` | 聊天：发消息、历史、清空 |
+| `scenes/streaming.md` | SSE 流式响应 |
+| `scenes/tool-gateway.md` | Tool Gateway：builtin 列表、invoke |
+| `scenes/tool-search.md` | 输入框工具搜索（本地过滤） |
+| `scenes/error-handling.md` | 异常处理：401、404、429 |
+
+## 环境准备
+
+### 登录获取 cookies
+
+每个场景的前置条件都需要先登录。用这个公共步骤：
 
 ```bash
-TOKEN=$(openssl rand -hex 32)
-HASH=$(echo -n "$TOKEN" | shasum -a 256 | cut -d' ' -f1)
-secret set UNCAGED_AGENT_TOKEN_<YOUR_NAME> "$TOKEN"
-
-# Insert into D1
-CF_TOKEN=$(secret get CLOUDFLARE_API_TOKEN)
-CF_ACCOUNT=$(secret get CLOUDFLARE_ACCOUNT_ID)
-cd <uncaged-repo>/packages/worker
-CLOUDFLARE_API_TOKEN="$CF_TOKEN" CLOUDFLARE_ACCOUNT_ID="$CF_ACCOUNT" \
-  npx wrangler d1 execute uncaged-memory --remote \
-  --command "INSERT INTO agent_tokens (id, user_id, agent_id, token_hash, label, created_at) VALUES (lower(hex(randomblob(8))), 'owner-scott', 'doudou', '${HASH}', '<label>', unixepoch());"
-```
-
-### 2. Login and save cookies
-
-```bash
-TOKEN=$(secret get UNCAGED_AGENT_TOKEN_<YOUR_NAME>)
+TOKEN=$(secret get UNCAGED_AGENT_TOKEN_XINGYUE)
 curl -s -X POST "https://uncaged.shazhou.work/auth/token" \
   -H "Content-Type: application/json" \
   -d "{\"token\": \"$TOKEN\"}" \
-  -c /tmp/uncaged-cookies.txt -o /tmp/uncaged-login.json
-cat /tmp/uncaged-login.json
-# Expected: {"userId":"owner-scott","ownerSlug":"scott","agentSlug":"doudou"}
+  -c /tmp/uncaged-cookies.txt
 ```
 
-## Test Scenarios
+如果没有 token，按 `scenes/auth.md` 的 "创建 Token" 章节操作。
 
-Run each scenario, record PASS/FAIL. On FAIL, collect logs (see Log Collection below).
+### 常量
 
-### Scenario 1: Auth
-
-```bash
-echo "=== S1: Auth ==="
-
-# 1a. Token login
-RESP=$(curl -s -w "\n%{http_code}" -X POST "https://uncaged.shazhou.work/auth/token" \
-  -H "Content-Type: application/json" \
-  -d "{\"token\": \"$(secret get UNCAGED_AGENT_TOKEN_XINGYUE)\"}" \
-  -c /tmp/uncaged-cookies.txt)
-HTTP=$(echo "$RESP" | tail -1)
-BODY=$(echo "$RESP" | head -1)
-if [ "$HTTP" = "200" ]; then echo "PASS: token login ($BODY)"; else echo "FAIL: token login HTTP=$HTTP body=$BODY"; fi
-
-# 1b. Session check
-RESP=$(curl -s -w "\n%{http_code}" "https://uncaged.shazhou.work/auth/session" -b /tmp/uncaged-cookies.txt)
-HTTP=$(echo "$RESP" | tail -1)
-if [ "$HTTP" = "200" ]; then echo "PASS: session check"; else echo "FAIL: session check HTTP=$HTTP"; fi
-
-# 1c. Token refresh
-RESP=$(curl -s -w "\n%{http_code}" -X POST "https://uncaged.shazhou.work/auth/refresh" \
-  -b /tmp/uncaged-cookies.txt -c /tmp/uncaged-cookies.txt)
-HTTP=$(echo "$RESP" | tail -1)
-if [ "$HTTP" = "200" ]; then echo "PASS: token refresh"; else echo "FAIL: token refresh HTTP=$HTTP"; fi
+```
+BASE_URL = https://uncaged.shazhou.work
+AGENT_PATH = /scott/doudou
+COOKIES = /tmp/uncaged-cookies.txt
+REPO = oc-xiaoju/uncaged
+UNCAGED_DIR = 按实际情况（如 ~/Code/uncaged）
 ```
 
-### Scenario 2: Chat (non-streaming)
+## 失败处理流程
+
+当场景验证失败时：
+
+### 1. 收集 Worker 日志
 
 ```bash
-echo "=== S2: Chat ==="
-BASE="https://uncaged.shazhou.work/scott/doudou"
-
-# 2a. Send message
-RESP=$(curl -s -w "\n%{http_code}" -X POST "$BASE/api/chat" \
-  -H "Content-Type: application/json" \
-  -b /tmp/uncaged-cookies.txt \
-  -d '{"message":"E2E test — reply OK"}')
-HTTP=$(echo "$RESP" | tail -1)
-BODY=$(echo "$RESP" | head -1)
-if [ "$HTTP" = "200" ] && echo "$BODY" | python3 -c "import sys,json; json.load(sys.stdin)['response']" 2>/dev/null; then
-  echo "PASS: chat send"
-else
-  echo "FAIL: chat send HTTP=$HTTP body=$BODY"
-fi
-
-# 2b. History
-RESP=$(curl -s -w "\n%{http_code}" "$BASE/api/history" -b /tmp/uncaged-cookies.txt)
-HTTP=$(echo "$RESP" | tail -1)
-if [ "$HTTP" = "200" ]; then
-  COUNT=$(echo "$RESP" | head -1 | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('history',[])))" 2>/dev/null)
-  echo "PASS: history ($COUNT messages)"
-else
-  echo "FAIL: history HTTP=$HTTP"
-fi
-```
-
-### Scenario 3: SSE Streaming
-
-```bash
-echo "=== S3: Streaming ==="
-BASE="https://uncaged.shazhou.work/scott/doudou"
-
-# Send streaming request, capture first 5 seconds
-STREAM_OUT=$(timeout 15 curl -s -N -X POST "$BASE/api/chat/stream" \
-  -H "Content-Type: application/json" \
-  -b /tmp/uncaged-cookies.txt \
-  -d '{"message":"Say hello in one word"}' 2>&1)
-
-# Check for token events
-if echo "$STREAM_OUT" | grep -q '"type":"token"'; then
-  echo "PASS: streaming (got token events)"
-elif echo "$STREAM_OUT" | grep -q '"type":"done"'; then
-  echo "PASS: streaming (got done event, may have been fast)"
-else
-  echo "FAIL: streaming — no token events. Output: $(echo "$STREAM_OUT" | head -3)"
-fi
-```
-
-### Scenario 4: Tool Gateway
-
-```bash
-echo "=== S4: Tool Gateway ==="
-BASE="https://uncaged.shazhou.work/scott/doudou"
-
-# 4a. Builtin tools list
-RESP=$(curl -s -w "\n%{http_code}" "$BASE/api/v1/tools/builtin" -b /tmp/uncaged-cookies.txt)
-HTTP=$(echo "$RESP" | tail -1)
-BODY=$(echo "$RESP" | head -1)
-if [ "$HTTP" = "200" ]; then
-  COUNT=$(echo "$BODY" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null)
-  echo "PASS: builtin tools ($COUNT tools)"
-else
-  echo "FAIL: builtin tools HTTP=$HTTP"
-fi
-
-# 4b. sigil_query invoke
-RESP=$(curl -s -w "\n%{http_code}" -X POST "$BASE/api/v1/tools/sigil_query/invoke" \
-  -H "Content-Type: application/json" \
-  -b /tmp/uncaged-cookies.txt \
-  -d '{"args":{"q":"test","limit":2}}')
-HTTP=$(echo "$RESP" | tail -1)
-BODY=$(echo "$RESP" | head -1)
-if [ "$HTTP" = "200" ] && echo "$BODY" | python3 -c "import sys,json; assert json.load(sys.stdin)['success']" 2>/dev/null; then
-  echo "PASS: sigil_query invoke"
-else
-  echo "FAIL: sigil_query invoke HTTP=$HTTP body=$(echo "$BODY" | head -c 200)"
-fi
-
-# 4c. memory_search invoke
-RESP=$(curl -s -w "\n%{http_code}" -X POST "$BASE/api/v1/tools/memory_search/invoke" \
-  -H "Content-Type: application/json" \
-  -b /tmp/uncaged-cookies.txt \
-  -d '{"args":{"query":"test"}}')
-HTTP=$(echo "$RESP" | tail -1)
-BODY=$(echo "$RESP" | head -1)
-if [ "$HTTP" = "200" ] && echo "$BODY" | python3 -c "import sys,json; assert json.load(sys.stdin)['success']" 2>/dev/null; then
-  echo "PASS: memory_search invoke"
-else
-  echo "FAIL: memory_search invoke HTTP=$HTTP body=$(echo "$BODY" | head -c 200)"
-fi
-```
-
-### Scenario 5: Error Handling
-
-```bash
-echo "=== S5: Error Handling ==="
-
-# 5a. Invalid token
-RESP=$(curl -s -w "\n%{http_code}" -X POST "https://uncaged.shazhou.work/auth/token" \
-  -H "Content-Type: application/json" \
-  -d '{"token":"0000000000000000000000000000000000000000000000000000000000000000"}')
-HTTP=$(echo "$RESP" | tail -1)
-if [ "$HTTP" = "401" ]; then echo "PASS: invalid token rejected (401)"; else echo "FAIL: invalid token HTTP=$HTTP (expected 401)"; fi
-
-# 5b. Chat without auth
-RESP=$(curl -s -w "\n%{http_code}" -X POST "https://uncaged.shazhou.work/scott/doudou/api/chat" \
-  -H "Content-Type: application/json" \
-  -d '{"message":"no auth"}')
-HTTP=$(echo "$RESP" | tail -1)
-if [ "$HTTP" = "401" ]; then echo "PASS: unauth chat rejected (401)"; else echo "FAIL: unauth chat HTTP=$HTTP (expected 401)"; fi
-
-# 5c. Non-existent tool
-RESP=$(curl -s -w "\n%{http_code}" -X POST "https://uncaged.shazhou.work/scott/doudou/api/v1/tools/nonexistent_tool_xyz/invoke" \
-  -H "Content-Type: application/json" \
-  -b /tmp/uncaged-cookies.txt \
-  -d '{"args":{}}')
-HTTP=$(echo "$RESP" | tail -1)
-if [ "$HTTP" = "404" ] || echo "$RESP" | head -1 | grep -q '"success":false'; then
-  echo "PASS: nonexistent tool rejected"
-else
-  echo "FAIL: nonexistent tool HTTP=$HTTP body=$(echo "$RESP" | head -1 | head -c 200)"
-fi
-```
-
-## Log Collection
-
-When a test fails, collect logs to diagnose. Run these and include output in bug reports.
-
-### Backend Logs (Cloudflare Worker)
-
-```bash
-# Real-time tail (run in background, reproduce the bug, then kill)
 CF_TOKEN=$(secret get CLOUDFLARE_API_TOKEN)
 CF_ACCOUNT=$(secret get CLOUDFLARE_ACCOUNT_ID)
-cd <uncaged-repo>/packages/worker
+cd <UNCAGED_DIR>/packages/worker
 
-# Capture 30 seconds of logs
-timeout 30 bash -c "CLOUDFLARE_API_TOKEN='$CF_TOKEN' CLOUDFLARE_ACCOUNT_ID='$CF_ACCOUNT' \
-  npx wrangler tail --format json 2>/dev/null" > /tmp/uncaged-worker-logs.json &
+# 后台抓 30 秒日志
+CLOUDFLARE_API_TOKEN="$CF_TOKEN" CLOUDFLARE_ACCOUNT_ID="$CF_ACCOUNT" \
+  npx wrangler tail --format json > /tmp/worker-logs.json 2>/dev/null &
 TAIL_PID=$!
 sleep 3
 
-# Reproduce the failing request here
-curl -s -X POST "https://uncaged.shazhou.work/scott/doudou/api/chat" \
-  -H "Content-Type: application/json" \
-  -b /tmp/uncaged-cookies.txt \
-  -d '{"message":"reproduce bug"}' > /tmp/uncaged-repro-response.json 2>&1
+# 复现失败请求
+<重跑失败的 curl 命令>
 
 sleep 10
 kill $TAIL_PID 2>/dev/null
-wait $TAIL_PID 2>/dev/null
 
-# Extract relevant log entries
-echo "=== Worker Logs ==="
-cat /tmp/uncaged-worker-logs.json | python3 -c "
+# 提取错误
+python3 -c "
 import sys, json
-for line in sys.stdin:
-    line = line.strip()
-    if not line: continue
+for line in open('/tmp/worker-logs.json'):
     try:
-        entry = json.loads(line)
-        logs = entry.get('logs', [])
-        exceptions = entry.get('exceptions', [])
-        status = entry.get('event', {}).get('response', {}).get('status', '?')
-        url = entry.get('event', {}).get('request', {}).get('url', '?')
-        if logs or exceptions or status >= 400:
+        e = json.loads(line.strip())
+        logs = e.get('logs', [])
+        excs = e.get('exceptions', [])
+        status = e.get('event',{}).get('response',{}).get('status','?')
+        if logs or excs or (isinstance(status,int) and status >= 400):
+            url = e.get('event',{}).get('request',{}).get('url','?')
             print(f'[{status}] {url}')
-            for log in logs:
-                print(f'  LOG: {log.get(\"message\", log)}')
-            for exc in exceptions:
-                print(f'  ERR: {exc.get(\"message\", exc)}')
+            for l in logs: print(f'  LOG: {l.get(\"message\",l)}')
+            for x in excs: print(f'  ERR: {x.get(\"message\",x)}')
     except: pass
-" 2>/dev/null
+"
 ```
 
-### Frontend State
+### 2. 收集前端状态
 
 ```bash
-# Check what the API actually returns
-echo "=== Frontend Debug ==="
-
-# Current session
 echo "--- Session ---"
-curl -s "https://uncaged.shazhou.work/auth/session" -b /tmp/uncaged-cookies.txt | python3 -m json.tool 2>/dev/null
+curl -s https://uncaged.shazhou.work/auth/session -b /tmp/uncaged-cookies.txt | python3 -m json.tool
 
-# Chat history (last 3 messages)
 echo "--- History (last 3) ---"
-curl -s "https://uncaged.shazhou.work/scott/doudou/api/history" -b /tmp/uncaged-cookies.txt | python3 -c "
+curl -s https://uncaged.shazhou.work/scott/doudou/api/history -b /tmp/uncaged-cookies.txt | python3 -c "
 import sys,json
-msgs = json.load(sys.stdin).get('history', [])
-for m in msgs[-3:]:
-    role = m['role']
-    content = str(m.get('content',''))[:100]
-    tc = len(m.get('tool_calls', []))
-    print(f'  [{role}] {content}' + (f' (+{tc} tool calls)' if tc else ''))
-" 2>/dev/null
-
-# Builtin tools
-echo "--- Builtin Tools ---"
-curl -s "https://uncaged.shazhou.work/scott/doudou/api/v1/tools/builtin" -b /tmp/uncaged-cookies.txt | python3 -c "
-import sys,json
-tools = json.load(sys.stdin)
-print(f'  {len(tools)} tools: {[t[\"slug\"] for t in tools]}')
-" 2>/dev/null
+for m in json.load(sys.stdin).get('history',[])[-3:]:
+    print(f'  [{m[\"role\"]}] {str(m.get(\"content\",\"\"))[:100]}')
+"
 ```
 
-### D1 Database State
+### 3. 开 Bug Issue
 
 ```bash
-CF_TOKEN=$(secret get CLOUDFLARE_API_TOKEN)
-CF_ACCOUNT=$(secret get CLOUDFLARE_ACCOUNT_ID)
-cd <uncaged-repo>/packages/worker
-
-echo "=== D1 State ==="
-
-# Users
-echo "--- Users ---"
-CLOUDFLARE_API_TOKEN="$CF_TOKEN" CLOUDFLARE_ACCOUNT_ID="$CF_ACCOUNT" \
-  npx wrangler d1 execute uncaged-memory --remote --json \
-  --command "SELECT id, slug, display_name FROM users LIMIT 10;" 2>/dev/null | \
-  python3 -c "import sys,json; [print(f'  {r}') for r in json.load(sys.stdin)[0]['results']]" 2>/dev/null
-
-# Agents
-echo "--- Agents ---"
-CLOUDFLARE_API_TOKEN="$CF_TOKEN" CLOUDFLARE_ACCOUNT_ID="$CF_ACCOUNT" \
-  npx wrangler d1 execute uncaged-memory --remote --json \
-  --command "SELECT id, slug, display_name FROM agents LIMIT 10;" 2>/dev/null | \
-  python3 -c "import sys,json; [print(f'  {r}') for r in json.load(sys.stdin)[0]['results']]" 2>/dev/null
-
-# Agent tokens
-echo "--- Active Tokens ---"
-CLOUDFLARE_API_TOKEN="$CF_TOKEN" CLOUDFLARE_ACCOUNT_ID="$CF_ACCOUNT" \
-  npx wrangler d1 execute uncaged-memory --remote --json \
-  --command "SELECT id, label, user_id, agent_id, created_at FROM agent_tokens WHERE revoked = 0;" 2>/dev/null | \
-  python3 -c "import sys,json; [print(f'  {r}') for r in json.load(sys.stdin)[0]['results']]" 2>/dev/null
-```
-
-## Opening a Bug Issue
-
-When a test fails, open a GitHub issue with collected evidence.
-
-### Template
-
-```bash
-SCENARIO="<which scenario failed>"
-EXPECTED="<what should happen>"
-ACTUAL="<what actually happened>"
-LOGS="<paste relevant logs from Log Collection>"
-
 gh issue create --repo oc-xiaoju/uncaged \
-  --title "bug: $SCENARIO" \
-  --body "## Bug Report (automated)
+  --title "bug: <简短描述>" \
+  --body "## Bug Report
 
-### Scenario
-$SCENARIO
+### 场景
+<哪个场景文件，哪个步骤>
 
-### Expected
-$EXPECTED
+### 期望
+<应该发生什么>
 
-### Actual
-$ACTUAL
+### 实际
+<实际发生了什么>
 
-### Reproduction
+### 复现
 \`\`\`bash
-<curl command that reproduces the issue>
+<curl 命令>
 \`\`\`
 
-### Response
+### 响应
 \`\`\`
-$(cat /tmp/uncaged-repro-response.json 2>/dev/null)
-\`\`\`
-
-### Worker Logs
-\`\`\`
-$LOGS
+<实际返回内容>
 \`\`\`
 
-### Environment
-- Time: $(date -u +%Y-%m-%dT%H:%M:%SZ)
-- Deploy version: $(curl -s https://uncaged.shazhou.work/ -o /dev/null -w '%{redirect_url}' 2>/dev/null || echo 'unknown')
+### Worker 日志
+\`\`\`
+<从上面收集的日志>
+\`\`\`
+
+### 环境
+- 时间: $(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 ---
 *Auto-generated by uncaged-test skill*" \
   --label "bug"
 ```
 
-### Example: Opening a bug for failed chat
+## API 速查
 
-```bash
-gh issue create --repo oc-xiaoju/uncaged \
-  --title "bug: chat API returns 500 on message send" \
-  --body "## Bug Report (automated)
+| 端点 | 方法 | 认证 | 说明 |
+|:-----|:-----|:-----|:-----|
+| `/auth/token` | POST | 无 | Token 登录 |
+| `/auth/session` | GET | cookie | 检查 session |
+| `/auth/refresh` | POST | cookie | 刷新 token |
+| `/:owner/:agent/api/chat` | POST | cookie | 发消息 |
+| `/:owner/:agent/api/chat/stream` | POST | cookie | SSE 流式 |
+| `/:owner/:agent/api/history` | GET | cookie | 历史记录 |
+| `/:owner/:agent/api/clear` | POST | cookie | 清空历史 |
+| `/:owner/:agent/api/v1/tools/builtin` | GET | 无 | Builtin 工具列表 |
+| `/:owner/:agent/api/v1/tools/:slug/invoke` | POST | 无 | 直接调用工具 |
 
-### Scenario
-S2: Chat — send message via POST /api/chat
-
-### Expected
-HTTP 200 with {\"response\": \"...\"}
-
-### Actual
-HTTP 500 with {\"error\": \"Internal error\"}
-
-### Worker Logs
-\`\`\`
-[500] https://uncaged.shazhou.work/scott/doudou/api/chat
-  ERR: TypeError: Cannot read properties of undefined (reading 'query')
-\`\`\`
-
----
-*Auto-generated by uncaged-test skill*" \
-  --label "bug"
-```
-
-## API Quick Reference
-
-| Endpoint | Method | Auth | Notes |
-|:---------|:-------|:-----|:------|
-| `/auth/token` | POST | none | Token login, sets cookies |
-| `/auth/session` | GET | cookie | Check current session |
-| `/auth/refresh` | POST | cookie | Refresh access token |
-| `/:owner/:agent/api/chat` | POST | cookie | Send message (non-streaming) |
-| `/:owner/:agent/api/chat/stream` | POST | cookie | Send message (SSE streaming) |
-| `/:owner/:agent/api/history` | GET | cookie | Load chat history |
-| `/:owner/:agent/api/clear` | POST | cookie | Clear chat history |
-| `/:owner/:agent/api/v1/tools/builtin` | GET | none | List builtin tools |
-| `/:owner/:agent/api/v1/tools/:slug/invoke` | POST | none | Invoke a tool directly |
-
-**⚠️ Use `/api/chat` not `/api/v1/chat`** — v1 path returns 401 due to web channel auth guard.
-
-## Architecture
-
-- **Domain**: `uncaged.shazhou.work`
-- **Stack**: CF Worker + D1 + KV + Vectorize + Durable Objects
-- **Frontend**: React 19 + Tailwind v4 (SPA via `[assets]` binding)
-- **Auth**: JWT (access 15min + refresh 7d), cookie-based
-- **CI/CD**: GitHub Actions → auto deploy on push to main
-- **Tool Registry**: SSOT in `packages/core/src/llm/tool-registry.ts`
-- **Repo**: `oc-xiaoju/uncaged`
+**⚠️ 用 `/api/chat` 不是 `/api/v1/chat`**
