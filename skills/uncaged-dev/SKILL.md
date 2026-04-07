@@ -1,6 +1,6 @@
 ---
 name: uncaged-dev
-version: 1.0.0
+version: 1.1.0
 description: >
   Uncaged 项目的完整开发 skill。涵盖：项目架构、开发流程、build/deploy、
   测试验证、调试排查。装这一个 skill 就获得所有 Uncaged 开发能力。
@@ -19,10 +19,11 @@ Uncaged 项目开发的一站式 skill。
 ```
 uncaged/
 ├── packages/
-│   ├── core/          # 共享核心：LLM、Memory、Sigil、Tool Registry
+│   ├── core/          # 共享核心：LLM、Memory、Sigil、Tool Registry、E2B
 │   ├── worker/        # CF Worker（后端 API + routing）
 │   ├── web/           # React 19 + Tailwind v4 前端（SPA）
-│   └── runner/        # Runner 客户端（连设备到 Agent）
+│   ├── runner/        # Runner 客户端（连设备到 Agent）
+│   └── health/        # Health monitoring worker
 ├── tests/e2e/         # 场景化测试用例
 ├── scripts/           # 部署脚本
 └── .github/workflows/ # CI/CD
@@ -34,11 +35,11 @@ uncaged/
 
 ## 开发流程
 
-**原则：Issue 驱动，协调者不写代码，Cursor Agent 干活。**
+**原则：Issue 驱动，协调者不写代码，subagent 干活。**
 
 ```
-需求/Bug → 开 Issue → 创建分支 → Cursor Agent 编码 → 
-验证（build + diff）→ Commit（closes #N）→ 合并 main → 自动部署
+需求/Bug → 开 Issue → Spawn subagent → 验证（build + diff）→ 
+Commit（closes #N）→ push main → 自动部署
 ```
 
 ### 1. 开 Issue
@@ -49,44 +50,34 @@ gh issue create --repo oc-xiaoju/uncaged \
   --body "## Problem\n...\n## Plan\n...\n## Acceptance\n..."
 ```
 
-### 2. 创建分支
+### 2. Spawn subagent 编码
+
+给 subagent 的任务包含：
+- Issue 链接
+- 仓库路径：`~/repos/uncaged`
+- 要改的文件列表和具体改法
+- 验证命令
+- commit message（含 `closes #N`）
+- **不要 push**，由协调者 review 后推
+
+### 3. 验证
 
 ```bash
-cd <uncaged-repo>
-git checkout main && git pull
-git checkout -b fix/descriptive-name   # 或 feat/
-```
-
-### 3. 用 Cursor Agent 编码
-
-```bash
-CURSOR_API_KEY="$(secret get CURSOR_API_KEY)" \
-  bash ~/.openclaw/workspace/skills/cursor-agent-cn/scripts/run.sh \
-  <uncaged-repo> "<任务描述>" auto ask    # 先 review
-# 确认后
-  ... auto write                          # 再 apply
-```
-
-中国区必须用 `auto` model。两步走：先 `ask` review，再 `write` apply。
-
-### 4. 验证
-
-```bash
-# Build（三步）
+# Build core（必须先 build，其他包依赖它）
 cd packages/core && rm -rf dist && npx tsc
-cd ../web && npm run build
-cd ../worker && npx tsc --noEmit
 
-# Diff 检查
-git diff --stat
+# Build web
+cd ../web && npx vite build
+
+# Type check worker（有预存在的 sigil-routes 类型错误，忽略）
+cd ../worker && npx tsc --noEmit
 ```
 
-### 5. 提交 + 合并
+### 4. 提交 + 推送
 
 ```bash
 git add -A
 git commit -m "fix: description (closes #N)"
-git checkout main && git merge <branch> --no-ff
 git push origin main    # 触发 CI/CD 自动部署
 ```
 
@@ -97,22 +88,18 @@ Push main → GitHub Actions → build core → build web → wrangler deploy
 
 ### 开发环境（手动）
 
-每人一个独立 Worker，互不影响：
+每人一个独立 Worker：
 
 ```bash
 bash scripts/deploy-dev.sh xingyue    # → uncaged-xingyue.shazhou.work
 bash scripts/deploy-dev.sh xiaoju     # → uncaged-xiaoju.shazhou.work
-bash scripts/deploy-dev.sh xiaomooo   # → uncaged-xiaomooo.shazhou.work
-bash scripts/deploy-dev.sh aobing     # → uncaged-aobing.shazhou.work
 ```
-
-脚本自动：build core → build web → wrangler deploy --env <name>
 
 ### 手动部署线上（紧急）
 
 ```bash
 cd packages/core && rm -rf dist && npx tsc
-cd ../web && npm run build
+cd ../web && npx vite build
 cd ../worker
 CLOUDFLARE_API_TOKEN="$(secret get CLOUDFLARE_API_TOKEN)" \
 CLOUDFLARE_ACCOUNT_ID="$(secret get CLOUDFLARE_ACCOUNT_ID)" \
@@ -126,7 +113,8 @@ CLOUDFLARE_ACCOUNT_ID="$(secret get CLOUDFLARE_ACCOUNT_ID)" \
 | core dist 为空 | tsconfig 缺 `noEmitOnError: false` | 检查 `packages/core/tsconfig.json` |
 | wrangler can't resolve @uncaged/core/* | core 没 build | 先 `cd packages/core && npx tsc` |
 | POST 请求返回 SPA HTML | wrangler.toml 缺 `run_worker_first = true` | 检查 `[assets]` 配置 |
-| 路由 404 | `normalizeApiPath` strip 了 `/api/v1/` | 路由匹配用 strip 后路径 |
+| 路由 404 | `normalizeApiPath` strip 了 `/api/` | 路由匹配用 strip 后路径 |
+| worker tsc 报 sigil-routes 类型错误 | 预存在的，不影响部署 | 忽略 |
 
 ## 测试
 
@@ -153,25 +141,6 @@ npx playwright test --reporter=html    # 生成 HTML 报告
 bash tests/e2e/scripts/run-tests.sh UNCAGED_AGENT_TOKEN_XINGYUE
 ```
 
-### 场景验证（给 subagent 用）
-
-场景文件在 `tests/e2e/scenes/`：
-
-| 场景 | 文件 |
-|:-----|:-----|
-| 认证 | `scenes/auth.md` |
-| 聊天 | `scenes/chat.md` |
-| 流式 | `scenes/streaming.md` |
-| Tool Gateway | `scenes/tool-gateway.md` |
-| 工具搜索 | `scenes/tool-search.md` |
-| 异常处理 | `scenes/error-handling.md` |
-
-派 subagent 验证：
-```
-读 <uncaged-repo>/tests/e2e/scenes/tool-gateway.md，按描述验证。
-失败了收集 logs 开 bug issue。
-```
-
 ### Token 登录（测试用）
 
 ```bash
@@ -187,9 +156,9 @@ curl -s -X POST "https://uncaged.shazhou.work/auth/token" \
 ### Worker 日志
 
 ```bash
+cd ~/repos/uncaged/packages/worker
 CF_TOKEN=$(secret get CLOUDFLARE_API_TOKEN)
 CF_ACCOUNT=$(secret get CLOUDFLARE_ACCOUNT_ID)
-cd <uncaged-repo>/packages/worker
 CLOUDFLARE_API_TOKEN="$CF_TOKEN" CLOUDFLARE_ACCOUNT_ID="$CF_ACCOUNT" \
   npx wrangler tail --format pretty
 ```
@@ -202,6 +171,13 @@ CLOUDFLARE_API_TOKEN="$CF_TOKEN" CLOUDFLARE_ACCOUNT_ID="$CF_ACCOUNT" \
   --command "SELECT * FROM users LIMIT 10;"
 ```
 
+### KV 查询
+
+```bash
+CLOUDFLARE_API_TOKEN="$CF_TOKEN" CLOUDFLARE_ACCOUNT_ID="$CF_ACCOUNT" \
+  npx wrangler kv key list --namespace-id 84a3ac3b64c846bd9e6c2b8632dc2499 --prefix "e2b:"
+```
+
 ### 前端状态
 
 ```bash
@@ -209,41 +185,88 @@ CLOUDFLARE_API_TOKEN="$CF_TOKEN" CLOUDFLARE_ACCOUNT_ID="$CF_ACCOUNT" \
 curl -s https://uncaged.shazhou.work/auth/session -b /tmp/uncaged-cookies.txt | python3 -m json.tool
 # History
 curl -s https://uncaged.shazhou.work/scott/doudou/api/history -b /tmp/uncaged-cookies.txt | python3 -c "
-import sys,json; [print(f'  [{m[\"role\"]}] {str(m.get(\"content\",\"\"))[:80]}') for m in json.load(sys.stdin)['history'][-5:]]"
+import sys,json; msgs=json.load(sys.stdin)['history']
+for m in msgs[-5:]: print(f'  [{m[\"role\"]:10s}] ts={m.get(\"timestamp\",\"?\")} {str(m.get(\"content\",\"\"))[:60]}')"
+# Clear history
+curl -s -X POST https://uncaged.shazhou.work/scott/doudou/api/clear -b /tmp/uncaged-cookies.txt
 ```
 
 ## 架构速查
 
-### API
+### API 路由
 
-| 端点 | 方法 | 说明 |
-|:-----|:-----|:-----|
-| `/auth/token` | POST | Token 登录 |
-| `/auth/session` | GET | Session 检查 |
-| `/:o/:a/api/chat` | POST | 发消息（⚠️ 不是 /api/v1/chat） |
-| `/:o/:a/api/chat/stream` | POST | SSE 流式 |
-| `/:o/:a/api/history` | GET | 聊天历史 |
-| `/:o/:a/api/v1/tools/builtin` | GET | Builtin 工具列表 |
-| `/:o/:a/api/v1/tools/:slug/invoke` | POST | 直接调用工具 |
+路由经过 `normalizeApiPath` 处理，会 strip `/api/` 和 `/api/v1/` 前缀。下表中"路由匹配"是 strip 后的内部路径。
+
+| 外部路径 | 内部匹配 | 方法 | 说明 |
+|:-----|:-----|:-----|:-----|
+| `/auth/token` | — | POST | Token 登录 |
+| `/auth/session` | — | GET | Session 检查 |
+| `/:o/:a/api/chat` | `/chat` | POST | 发消息 |
+| `/:o/:a/api/chat/stream` | `/chat/stream` | POST | SSE 流式 |
+| `/:o/:a/api/history` | `/history` | GET | 聊天历史 |
+| `/:o/:a/api/clear` | `/clear` | POST | 清空历史 |
+| `/:o/:a/api/v1/tools/builtin` | `/tools/builtin` | GET | Builtin 工具列表 |
+| `/:o/:a/api/v1/tools/:slug/invoke` | `/tools/:slug/invoke` | POST | 直接调用工具 |
+| `/:o/:a/hook/telegram` | `/hook/telegram` | POST | Telegram webhook |
 
 ### 关键文件
 
 | 文件 | 作用 |
 |:-----|:-----|
 | `core/src/llm/tool-registry.ts` | **SSOT** — 所有 builtin tool 定义 |
-| `core/src/llm/agent-loop.ts` | LLM agent loop + tool execution |
+| `core/src/llm/agent-loop.ts` | LLM agent loop + tool execution + 每条消息打 timestamp |
+| `core/src/pipeline.ts` | contextCompressor — 按逻辑单元压缩（保持 tool_call 配对完整） |
+| `core/src/chat-handler.ts` | 聊天命令处理（/new /clear /help /soul /start） |
+| `core/src/chat-store.ts` | ChatMessage 接口（含 timestamp 字段）+ KV 存储 |
+| `core/src/e2b-provider.ts` | E2B sandbox 管理（create/resume/exec） |
+| `core/src/runner-hub.ts` | RunnerHub DO — E2B exec 调度（含 resume fallback） |
 | `worker/src/index.ts` | 主路由 + Worker entry |
 | `worker/src/services/capability-service.ts` | Tool Gateway 执行层 |
 | `web/src/hooks/use-chat.ts` | 前端聊天状态 |
-| `web/src/components/chat/chat-input.tsx` | 输入框 + 工具搜索 |
-| `web/src/components/chat/message-bubble.tsx` | 消息气泡渲染 |
+| `web/src/components/chat/chat-input.tsx` | 输入框 + 斜杠命令 + 工具搜索 overlay |
+| `web/src/components/chat/tool-search-overlay.tsx` | 命令/工具搜索 overlay（含 slash commands） |
 | `worker/wrangler.toml` | CF 配置（bindings + routes + envs） |
 
-### 路由注意事项
+### E2B Sandbox（代码执行）
 
-- `normalizeApiPath` 会 strip `/api/v1/` 前缀
-- 新路由要用 strip 后的路径匹配（如 `/tools/:slug/invoke` 不是 `/api/v1/tools/...`）
-- `[assets] run_worker_first = true` 确保 POST 请求到 Worker
+| 文件 | 作用 |
+|:-----|:-----|
+| `core/src/e2b-provider.ts` | API 封装：createSandbox / getSandbox / resumeSandbox / execCommand |
+| `core/src/runner-hub.ts` | 调度逻辑：KV 缓存 sandbox ID → getSandbox 检查状态 → resume 或新建 |
+
+**E2B 注意事项：**
+- `SandboxInfo` 字段是 `state`（不是 `status`）、`sandboxID`（大写 ID）
+- `resumeSandbox()` 必须传 `body: JSON.stringify({ timeout })` 否则 400
+- Resume 失败时 fallback 到 `createSandbox()`
+- 全链路有 `[E2B]` 和 `[RunnerHub]` 前缀的 console.log
+
+### Context Compressor
+
+`contextCompressor` 在 `core/src/pipeline.ts`：
+- 按**逻辑单元**分组：tool-call 单元 = assistant(tool_calls) + 所有 tool(result)
+- 压缩时整组保留或整组丢弃，不会拆散 tool_call 配对
+- 孤立的 tool_result 直接 drop
+- 压缩后的 tool 单元在 summary 里显示 `[Called {tool_name} → {result preview}]`
+
+### 消息时间戳
+
+每条 `ChatMessage` 都有 `timestamp?: number`（epoch ms）：
+- 在创建时打 `Date.now()`（agent-loop、chat-handler）
+- History API 返回 `msg.timestamp || Date.now()`（旧消息兼容）
+
+### 斜杠命令
+
+在 `chat-handler.ts` 的 `handleCommand()` 中：
+
+| 命令 | 作用 |
+|:-----|:-----|
+| `/new` | 清空历史，开始新 session |
+| `/clear` | 清空聊天记录 |
+| `/help` | 查看可用命令 |
+| `/soul` | 查看 AI 人格设定 |
+| `/start` | 重置对话 |
+
+前端输入 `/` 时弹出命令提示 overlay（`chat-input.tsx` + `tool-search-overlay.tsx`）。
 
 ### Tool Registry（SSOT）
 
@@ -254,6 +277,7 @@ import sys,json; [print(f'  [{m[\"role\"]}] {str(m.get(\"content\",\"\"))[:80]}'
 ```bash
 secret get CLOUDFLARE_API_TOKEN       # CF 部署
 secret get CLOUDFLARE_ACCOUNT_ID      # CF 账户
-secret get CURSOR_API_KEY             # Cursor Agent
 secret get UNCAGED_AGENT_TOKEN_XINGYUE # 测试登录 token
+secret get DOUDOU_TELEGRAM_BOT_TOKEN  # 豆豆 Telegram Bot
+secret get E2B_API_KEY                # E2B sandbox（在 wrangler secrets 中）
 ```
